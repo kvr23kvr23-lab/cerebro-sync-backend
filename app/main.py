@@ -40,6 +40,10 @@ if _os.environ.get("SEED_ON_START") == "1":
 
 app = FastAPI(title="Cerebro Multi-User Backend", version="0.1.0")
 
+# AI endpoints (Draft with AI, note auto-extract) — same server, needs ANTHROPIC_API_KEY.
+from .ai import router as ai_router
+app.include_router(ai_router)
+
 # CORS: the frontend (Vercel) calls this API from the browser. "*" is fine for testing;
 # tighten to the exact frontend URL for a real deployment.
 app.add_middleware(
