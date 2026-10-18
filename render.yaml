@@ -1,0 +1,31 @@
+# Render Blueprint — one-click deploy of the Cerebro sync server + its database.
+# In Render: New → Blueprint → pick the repo with this file → Apply.
+# It provisions a PostgreSQL database and a web service, wires DATABASE_URL between them,
+# generates a JWT secret, and seeds the first unit + login users on first start.
+#
+# Free tiers are fine for testing: the web service sleeps when idle (first request after a
+# nap takes ~30–50s to wake), and Render's free database is time-limited. Upgrade either to
+# a paid instance (~$7/mo each) when you want it always-on and persistent.
+
+databases:
+  - name: cerebro-db
+    plan: free
+
+services:
+  - type: web
+    name: cerebro-sync
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cerebro-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: SEED_ON_START
+        value: "1"
