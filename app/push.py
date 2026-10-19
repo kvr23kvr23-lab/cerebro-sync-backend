@@ -140,26 +140,27 @@ def _due_followups(data: dict, now_ms: float):
     return out
 
 
-def _send(sub: PushSubscription, title: str, body: str, url: str, pem: str, db: Session) -> bool:
+def _send(sub: PushSubscription, title: str, body: str, url: str, key_path: str, db: Session):
+    """Returns None on success, or an error string (so the scan can report why it failed)."""
     from pywebpush import webpush, WebPushException
     payload = json.dumps({"title": title, "body": body, "url": url, "tag": "cerebro-followup"})
     try:
         webpush(
             subscription_info={"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
             data=payload,
-            vapid_private_key=pem,
+            vapid_private_key=key_path,  # a PEM file path — pywebpush loads it reliably
             vapid_claims={"sub": _subject()},
             ttl=3600,
         )
-        return True
+        return None
     except WebPushException as e:
         code = getattr(getattr(e, "response", None), "status_code", None)
         if code in (404, 410):  # subscription gone — drop it
             db.query(PushSubscription).filter(PushSubscription.id == sub.id).delete()
             db.commit()
-        return False
-    except Exception:
-        return False
+        return f"WebPushException code={code}: {e}"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
 
 
 @router.post("/run")
@@ -179,28 +180,44 @@ def run(request: Request, db: Session = Depends(get_db)):
     if not subs_by_unit:
         return {"ok": True, "sent": 0, "note": "no subscriptions"}
 
+    # Write the PEM to a temp file once; pywebpush loads a PEM *file* reliably across versions.
+    import tempfile
+    fd, key_path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as f:
+        f.write(pem)
+
     sent = 0
     due_scanned = 0
-    for p in db.query(Patient).filter(Patient.deleted == False).all():  # noqa: E712
-        subs = subs_by_unit.get(p.unit_id)
-        if not subs:
-            continue
-        data = p.data or {}
-        identity = data.get("patient") or {}
-        name = identity.get("name") or "Patient"
-        bed = identity.get("bedNumber")
-        for inv_id, label, fa in _due_followups(data, now_ms):
-            due_scanned += 1
-            title = f"Cerebro · {name}" + (f" (bed {bed})" if bed else "")
-            body = f"{label} — follow-up due"
-            for s in subs:
-                key = f"{s.id}|{inv_id}|{fa}"
-                if db.query(PushSent).filter(PushSent.dedup_key == key).first():
-                    continue
-                if _send(s, title, body, "/reminders", pem, db):
-                    db.add(PushSent(dedup_key=key))
-                    db.commit()
-                    sent += 1
+    errors = []
+    try:
+        for p in db.query(Patient).filter(Patient.deleted == False).all():  # noqa: E712
+            subs = subs_by_unit.get(p.unit_id)
+            if not subs:
+                continue
+            data = p.data or {}
+            identity = data.get("patient") or {}
+            name = identity.get("name") or "Patient"
+            bed = identity.get("bedNumber")
+            for inv_id, label, fa in _due_followups(data, now_ms):
+                due_scanned += 1
+                title = f"Cerebro · {name}" + (f" (bed {bed})" if bed else "")
+                body = f"{label} — follow-up due"
+                for s in subs:
+                    key = f"{s.id}|{inv_id}|{fa}"
+                    if db.query(PushSent).filter(PushSent.dedup_key == key).first():
+                        continue
+                    err = _send(s, title, body, "/reminders", key_path, db)
+                    if err is None:
+                        db.add(PushSent(dedup_key=key))
+                        db.commit()
+                        sent += 1
+                    elif len(errors) < 5:
+                        errors.append(err)
+    finally:
+        try:
+            os.remove(key_path)
+        except Exception:
+            pass
 
     try:
         cutoff = dt.datetime.utcnow() - dt.timedelta(days=30)
@@ -209,7 +226,7 @@ def run(request: Request, db: Session = Depends(get_db)):
     except Exception:
         db.rollback()
 
-    return {"ok": True, "sent": sent, "due_scanned": due_scanned}
+    return {"ok": True, "sent": sent, "due_scanned": due_scanned, "errors": errors}
 
 
 @router.get("/debug")
