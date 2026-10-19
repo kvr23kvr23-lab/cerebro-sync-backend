@@ -48,6 +48,10 @@ app.include_router(ai_router)
 from .admin import router as admin_router
 app.include_router(admin_router)
 
+# Web Push endpoints (notifications that reach a phone even when the app is closed).
+from .push import router as push_router
+app.include_router(push_router)
+
 # CORS: the frontend (Vercel) calls this API from the browser. "*" is fine for testing;
 # tighten to the exact frontend URL for a real deployment.
 app.add_middleware(
