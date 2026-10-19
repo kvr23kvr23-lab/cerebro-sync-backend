@@ -210,3 +210,46 @@ def run(request: Request, db: Session = Depends(get_db)):
         db.rollback()
 
     return {"ok": True, "sent": sent, "due_scanned": due_scanned}
+
+
+@router.get("/debug")
+def debug(request: Request, db: Session = Depends(get_db)):
+    """Temporary diagnostic: what the scan actually sees on the server. Secret-protected."""
+    secret = os.environ.get("PUSH_RUN_SECRET", "")
+    if not secret or request.query_params.get("secret") != secret:
+        raise HTTPException(status_code=403, detail="Bad or missing secret.")
+    now_ms = dt.datetime.now(dt.timezone.utc).timestamp() * 1000
+    subs = db.query(PushSubscription).all()
+    out = {
+        "now_utc_ms": now_ms,
+        "subscriptions": [{"unit_id": s.unit_id, "user_id": s.user_id, "endpoint_host": (s.endpoint or "")[:40]} for s in subs],
+        "patients": [],
+    }
+    for p in db.query(Patient).filter(Patient.deleted == False).all():  # noqa: E712
+        data = p.data or {}
+        invs = data.get("investigations")
+        rec = {
+            "unit_id": p.unit_id,
+            "name": (data.get("patient") or {}).get("name"),
+            "bundle_keys": sorted(list(data.keys()))[:30],
+            "investigations_type": type(invs).__name__,
+            "investigations_count": len(invs) if isinstance(invs, list) else None,
+            "reminders": [],
+        }
+        if isinstance(invs, list):
+            for inv in invs:
+                if not isinstance(inv, dict):
+                    continue
+                if inv.get("remindOn") or inv.get("followUpAt"):
+                    t = _parse_ms(inv.get("followUpAt")) if inv.get("followUpAt") else None
+                    rec["reminders"].append({
+                        "id": inv.get("id"),
+                        "keys": sorted(list(inv.keys()))[:20],
+                        "remindOn": inv.get("remindOn"),
+                        "followUpAt": inv.get("followUpAt"),
+                        "status": inv.get("status"),
+                        "parsed_ms": t,
+                        "due": (t is not None and t <= now_ms and (now_ms - t) <= OVERDUE_WINDOW_MS),
+                    })
+        out["patients"].append(rec)
+    return out
