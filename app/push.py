@@ -229,6 +229,40 @@ def run(request: Request, db: Session = Depends(get_db)):
     return {"ok": True, "sent": sent, "due_scanned": due_scanned, "errors": errors}
 
 
+@router.get("/test")
+@router.post("/test")
+def test(request: Request, db: Session = Depends(get_db)):
+    """Send a test push to EVERY subscription right now — no dedup, no due check.
+    For confirming delivery. Secret-protected."""
+    secret = os.environ.get("PUSH_RUN_SECRET", "")
+    if not secret or request.query_params.get("secret") != secret:
+        raise HTTPException(status_code=403, detail="Bad or missing secret.")
+    pem = _private_pem()
+    if not pem:
+        raise HTTPException(status_code=503, detail="Push not configured.")
+    import tempfile
+    fd, key_path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as f:
+        f.write(pem)
+    total = 0
+    sent = 0
+    errors = []
+    try:
+        for s in db.query(PushSubscription).all():
+            total += 1
+            err = _send(s, "Cerebro test", "Push is working — this is a test.", "/reminders", key_path, db)
+            if err is None:
+                sent += 1
+            elif len(errors) < 10:
+                errors.append(err)
+    finally:
+        try:
+            os.remove(key_path)
+        except Exception:
+            pass
+    return {"ok": True, "subscriptions": total, "sent": sent, "errors": errors}
+
+
 @router.get("/debug")
 def debug(request: Request, db: Session = Depends(get_db)):
     """Temporary diagnostic: what the scan actually sees on the server. Secret-protected."""
