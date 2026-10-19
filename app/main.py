@@ -44,6 +44,10 @@ app = FastAPI(title="Cerebro Multi-User Backend", version="0.1.0")
 from .ai import router as ai_router
 app.include_router(ai_router)
 
+# Admin endpoints (Team screen — create users, reset passwords, enable/disable). Admin-only.
+from .admin import router as admin_router
+app.include_router(admin_router)
+
 # CORS: the frontend (Vercel) calls this API from the browser. "*" is fine for testing;
 # tighten to the exact frontend URL for a real deployment.
 app.add_middleware(
