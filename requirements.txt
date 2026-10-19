@@ -9,4 +9,10 @@ python-jose[cryptography]==3.3.0
 python-multipart==0.0.9
 
 anthropic==0.39.0
+# anthropic 0.39.0 passes a `proxies` kwarg that httpx>=0.28 removed, which crashes
+# Anthropic() construction with "unexpected keyword argument 'proxies'". Pin httpx to the
+# last 0.27.x so the AI client builds. (Bump both together if upgrading anthropic later.)
 httpx==0.27.2
+
+# Web Push (server-sent notifications that reach a phone even when the app is closed).
+pywebpush==2.0.0
