@@ -23,7 +23,7 @@ from typing import Any, Optional
 router = APIRouter()
 
 # Model is configurable; a sensible current default. Change ANTHROPIC_MODEL to use another.
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 
 
 def _client():
@@ -146,3 +146,97 @@ def extract(body: ExtractIn):
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
             "time": dt.datetime.utcnow().isoformat() + "Z"}
+
+
+# ----------------------------------------------------------------------- /literature
+# Case Intelligence, slice 1: turn the de-identified case into a focused query and pull
+# published articles / case reports from Europe PMC (indexes PubMed + more; free, no key).
+# The LLM only ever sees the de-identified record; Europe PMC only sees the query string.
+EPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+QUERY_SYSTEM = (
+    "You turn a de-identified neurology case into ONE focused literature-search query for "
+    "Europe PMC (which indexes PubMed). Output ONLY the query string — no prose, no quotes, "
+    "no explanation, one line. Use the diagnosis/syndrome plus 1-3 key distinguishing features; "
+    "join concepts with AND and synonyms with OR. Keep it short. "
+    "Example: guillain-barre syndrome AND (axonal OR AMAN) AND nerve conduction"
+)
+
+
+class LiteratureIn(BaseModel):
+    record: dict[str, Any] = {}
+    query: str = ""          # optional: clinician-supplied query overrides the generated one
+    cursor: str = "*"        # Europe PMC cursorMark; "*" is the first page
+    page_size: int = 5
+
+
+def _build_query(record: dict, manual: str) -> str:
+    if (manual or "").strip():
+        return " ".join(manual.split())[:300]
+    record_json = json.dumps(record, ensure_ascii=False)
+    q = _complete(QUERY_SYSTEM, f"De-identified case (JSON):\n{record_json}\n\nSearch query:", max_tokens=120)
+    q = " ".join((q or "").split())[:300]
+    return q or "neurology"
+
+
+def _epmc_article(r: dict) -> dict:
+    pmid = r.get("pmid")
+    doi = r.get("doi")
+    src = r.get("source") or "MED"
+    rid = r.get("id") or ""
+    if pmid:
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+    elif doi:
+        url = f"https://doi.org/{doi}"
+    else:
+        url = f"https://europepmc.org/article/{src}/{rid}"
+    journal = r.get("journalTitle") or ((r.get("journalInfo") or {}).get("journal") or {}).get("title") or ""
+    abstract = (r.get("abstractText") or "").strip()
+    # abstractText can carry light HTML tags from Europe PMC; strip the common ones.
+    for tag in ("<p>", "</p>", "<i>", "</i>", "<b>", "</b>", "<sup>", "</sup>", "<sub>", "</sub>"):
+        abstract = abstract.replace(tag, "")
+    if len(abstract) > 300:
+        abstract = abstract[:300].rstrip() + "…"
+    return {
+        "id": f"{src}:{rid}",
+        "title": (r.get("title") or "(untitled)").rstrip("."),
+        "authors": r.get("authorString") or "",
+        "journal": journal,
+        "year": str(r.get("pubYear") or ""),
+        "isOpenAccess": (r.get("isOpenAccess") == "Y"),
+        "url": url,
+        "pmid": pmid or "",
+        "doi": doi or "",
+        "abstract": abstract,
+    }
+
+
+@router.post("/api/ai/literature")
+def literature(body: LiteratureIn):
+    query = _build_query(body.record, body.query)
+    params = {
+        "query": query,
+        "format": "json",
+        "resultType": "core",       # includes abstractText + journal info
+        "pageSize": max(1, min(body.page_size or 5, 10)),
+        "cursorMark": body.cursor or "*",
+    }
+    try:
+        import httpx
+        with httpx.Client(timeout=20) as c:
+            resp = c.get(EPMC_SEARCH, params=params, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Literature search failed: {e}")
+    results = (data.get("resultList") or {}).get("result") or []
+    articles = [_epmc_article(r) for r in results]
+    next_cursor = data.get("nextCursorMark") or ""
+    has_more = bool(next_cursor and next_cursor != (body.cursor or "*") and len(articles) >= params["pageSize"])
+    return {
+        "query": query,
+        "articles": articles,
+        "total": data.get("hitCount", 0),
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+    }
