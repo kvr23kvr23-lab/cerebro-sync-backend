@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models import User, Unit
+from .models import User, Unit, Patient, ClinicalRecord, PushSubscription
 from .deps import require_admin
 from .security import hash_password
 from .schemas import CreateUserIn, SetActiveIn, ResetPasswordIn, CreateUnitIn
@@ -149,3 +149,21 @@ def set_user_unit(uid: str, body: SetUnitIn, admin: User = Depends(require_admin
     u.units = [unit]
     db.commit()
     return _user_out(u)
+
+
+@router.delete("/users/{uid}")
+def delete_user(uid: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Permanently remove a login. Clinical data is preserved: the departing user's authorship
+    pointers on patients and records are blanked (never the data itself), their device push
+    subscriptions are dropped, and the account is deleted. You can't remove your own account."""
+    u = _target(db, uid)
+    if u.id == admin.id:
+        raise HTTPException(status_code=400, detail="You can't remove your own admin account.")
+    db.query(Patient).filter(Patient.created_by == uid).update({"created_by": None})
+    db.query(Patient).filter(Patient.updated_by == uid).update({"updated_by": None})
+    db.query(ClinicalRecord).filter(ClinicalRecord.created_by == uid).update({"created_by": None})
+    db.query(ClinicalRecord).filter(ClinicalRecord.updated_by == uid).update({"updated_by": None})
+    db.query(PushSubscription).filter(PushSubscription.user_id == uid).delete()
+    db.delete(u)  # user_units links cascade
+    db.commit()
+    return {"ok": True}
