@@ -157,6 +157,55 @@ def extract(body: ExtractIn):
     }
 
 
+# ------------------------------------------------------------------- /history-review
+# Drafts the history summary AND checks completeness: what important history points are not
+# yet documented, and what to ask to fill them. History only — never comments on exam/dx.
+HISTORY_REVIEW_SYSTEM = (
+    SAFETY +
+    " You are reviewing a neurology HISTORY only (not examination, investigations or diagnosis). "
+    "Return STRICT JSON only (no prose, no markdown fences): "
+    '{"summary":"", "missing":[""], "questions":[""]}. '
+    "summary: a concise 4-7 line history summary (prose, no headings) — presenting syndrome & "
+    "duration, onset & course, key positives, important negatives, relevant background, and any "
+    "unresolved points within the history. Do NOT mention examination, investigations, diagnosis "
+    "or differential. "
+    "missing: important history points NOT yet documented that matter for THIS presentation "
+    "(short phrases, most important first). "
+    "questions: specific questions to ask the patient or informant to fill those gaps. "
+    "Base everything ONLY on the history provided; never invent findings. Use [] where nothing applies."
+)
+
+
+class HistoryReviewIn(BaseModel):
+    record: dict[str, Any] = {}
+
+
+@router.post("/api/ai/history-review")
+def history_review(body: HistoryReviewIn):
+    record_json = json.dumps(body.record, ensure_ascii=False, indent=2)
+    user = f"De-identified HISTORY record (JSON):\n{record_json}\n\nReturn the JSON."
+    text = _complete(HISTORY_REVIEW_SYSTEM, user, max_tokens=1200)
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+    try:
+        data = json.loads(cleaned)
+    except Exception:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        data = json.loads(cleaned[start:end + 1]) if start >= 0 and end > start else {}
+
+    def _list(key):
+        return [str(x).strip() for x in (data.get(key) or []) if str(x).strip()][:8]
+
+    return {
+        "summary": (data.get("summary") or "").strip(),
+        "missing": _list("missing"),
+        "questions": _list("questions"),
+    }
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
