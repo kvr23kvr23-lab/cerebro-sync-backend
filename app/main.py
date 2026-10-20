@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .db import Base, engine, get_db
 from . import models
 from .models import Unit, User, Patient, ClinicalRecord
-from .deps import current_user, user_unit_ids, require_admin
+from .deps import current_user, user_unit_ids, require_admin, active_unit, accessible_unit_ids
 from .security import hash_password, verify_password, create_token
 from .schemas import (
     LoginIn, LoginOut, UserOut, UnitOut, PatientIn, RecordIn, ItemOut, SyncOut,
@@ -130,8 +130,9 @@ def _unit_guard(user: User) -> str:
 
 
 @app.get("/api/patients", response_model=list[ItemOut])
-def list_patients(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    units = user_unit_ids(user)
+def list_patients(user: User = Depends(current_user), active: str | None = Depends(active_unit), db: Session = Depends(get_db)):
+    # Which ward's list: the one being viewed (active), else the user's home unit(s).
+    units = [active] if active else user_unit_ids(user)
     rows = (
         db.query(Patient)
         .filter(Patient.unit_id.in_(units), Patient.deleted == False)  # noqa: E712
@@ -142,12 +143,13 @@ def list_patients(user: User = Depends(current_user), db: Session = Depends(get_
 
 
 @app.post("/api/patients", response_model=ItemOut)
-def upsert_patient(body: PatientIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    unit_id = _unit_guard(user)
+def upsert_patient(body: PatientIn, user: User = Depends(current_user), active: str | None = Depends(active_unit), db: Session = Depends(get_db)):
+    # A new patient lands in the ward currently being viewed (active), else the home unit.
+    unit_id = active or _unit_guard(user)
     p = db.query(Patient).filter(Patient.id == body.id).first() if body.id else None
     if p:
-        # Must belong to one of the user's units (isolation).
-        if p.unit_id not in user_unit_ids(user):
+        # Must be a unit the user may access (admins: any; others: their own).
+        if p.unit_id not in accessible_unit_ids(user, db):
             raise HTTPException(status_code=403, detail="Not your unit's patient")
         p.data = body.data
         p.updated_by = user.id
@@ -164,7 +166,7 @@ def upsert_patient(body: PatientIn, user: User = Depends(current_user), db: Sess
 @app.get("/api/patients/{pid}", response_model=ItemOut)
 def get_patient(pid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     p = db.query(Patient).filter(Patient.id == pid).first()
-    if not p or p.unit_id not in user_unit_ids(user):
+    if not p or p.unit_id not in accessible_unit_ids(user, db):
         raise HTTPException(status_code=404, detail="Not found")
     return _patient_out(p)
 
@@ -172,7 +174,7 @@ def get_patient(pid: str, user: User = Depends(current_user), db: Session = Depe
 @app.delete("/api/patients/{pid}")
 def delete_patient(pid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     p = db.query(Patient).filter(Patient.id == pid).first()
-    if not p or p.unit_id not in user_unit_ids(user):
+    if not p or p.unit_id not in accessible_unit_ids(user, db):
         raise HTTPException(status_code=404, detail="Not found")
     p.deleted = True
     p.updated_by = user.id
@@ -182,22 +184,22 @@ def delete_patient(pid: str, user: User = Depends(current_user), db: Session = D
 
 # -------------------------------------------------------------------- clinical records
 @app.post("/api/records", response_model=ItemOut)
-def upsert_record(body: RecordIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    unit_id = _unit_guard(user)
-    # The patient must be in the user's unit.
+def upsert_record(body: RecordIn, user: User = Depends(current_user), active: str | None = Depends(active_unit), db: Session = Depends(get_db)):
+    # The patient must be in a unit the user may access.
     patient = db.query(Patient).filter(Patient.id == body.patient_id).first()
-    if not patient or patient.unit_id not in user_unit_ids(user):
+    if not patient or patient.unit_id not in accessible_unit_ids(user, db):
         raise HTTPException(status_code=403, detail="Not your unit's patient")
     r = db.query(ClinicalRecord).filter(ClinicalRecord.id == body.id).first() if body.id else None
     if r:
-        if r.unit_id not in user_unit_ids(user):
+        if r.unit_id not in accessible_unit_ids(user, db):
             raise HTTPException(status_code=403, detail="Not your unit's record")
         r.data = body.data
         r.kind = body.kind
         r.updated_by = user.id
     else:
+        # A record always lives with its patient's unit, so it can never drift to another ward.
         r = ClinicalRecord(
-            id=body.id or None, unit_id=unit_id, patient_id=body.patient_id,
+            id=body.id or None, unit_id=patient.unit_id, patient_id=body.patient_id,
             kind=body.kind, data=body.data, created_by=user.id, updated_by=user.id,
         )
         db.add(r)
@@ -208,7 +210,7 @@ def upsert_record(body: RecordIn, user: User = Depends(current_user), db: Sessio
 @app.get("/api/records", response_model=list[ItemOut])
 def list_records(patient_id: str, kind: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
     patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient or patient.unit_id not in user_unit_ids(user):
+    if not patient or patient.unit_id not in accessible_unit_ids(user, db):
         raise HTTPException(status_code=404, detail="Not found")
     q = db.query(ClinicalRecord).filter(
         ClinicalRecord.patient_id == patient_id,
@@ -222,7 +224,7 @@ def list_records(patient_id: str, kind: str = "", user: User = Depends(current_u
 @app.delete("/api/records/{rid}")
 def delete_record(rid: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
     r = db.query(ClinicalRecord).filter(ClinicalRecord.id == rid).first()
-    if not r or r.unit_id not in user_unit_ids(user):
+    if not r or r.unit_id not in accessible_unit_ids(user, db):
         raise HTTPException(status_code=404, detail="Not found")
     r.deleted = True
     r.updated_by = user.id
@@ -232,10 +234,11 @@ def delete_record(rid: str, user: User = Depends(current_user), db: Session = De
 
 # ------------------------------------------------------------------------------- sync
 @app.get("/api/sync", response_model=SyncOut)
-def sync(since: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Everything in the user's unit changed since `since` (ISO time). Powers live updates:
-    the app calls this periodically to pull peers' changes."""
-    units = user_unit_ids(user)
+def sync(since: str = "", user: User = Depends(current_user), active: str | None = Depends(active_unit), db: Session = Depends(get_db)):
+    """Everything in the viewed ward changed since `since` (ISO time). Powers live updates:
+    the app calls this periodically to pull peers' changes. The ward is the one being viewed
+    (active), else the user's home unit — so an admin's sync follows their ward switch."""
+    units = [active] if active else user_unit_ids(user)
     cutoff = None
     if since:
         try:
