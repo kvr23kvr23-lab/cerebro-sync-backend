@@ -70,6 +70,29 @@ def rename_unit(uid: str, body: RenameIn, admin: User = Depends(require_admin), 
     return {"id": unit.id, "name": unit.name}
 
 
+@router.delete("/units/{uid}")
+def delete_unit(uid: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Remove an empty unit. Refused while the unit still holds ANY patient (including
+    discharged/soft-deleted — the data stays referenced) or any member, and the last
+    remaining unit can't be deleted. This protects clinical data and keeps every login in
+    a real unit; move or remove them first, then delete."""
+    unit = db.query(Unit).filter(Unit.id == uid).first()
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found.")
+    if db.query(Unit).count() <= 1:
+        raise HTTPException(status_code=400, detail="You can't delete the only remaining unit.")
+    n_patients = db.query(Patient).filter(Patient.unit_id == uid).count()
+    if n_patients:
+        raise HTTPException(status_code=400, detail=f"This unit still has {n_patients} patient(s). Move or remove them first.")
+    n_members = len(unit.users)
+    if n_members:
+        raise HTTPException(status_code=400, detail=f"This unit still has {n_members} member(s). Move or remove them first.")
+    db.query(PushSubscription).filter(PushSubscription.unit_id == uid).delete()
+    db.delete(unit)
+    db.commit()
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------------------- users
 @router.get("/users")
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):

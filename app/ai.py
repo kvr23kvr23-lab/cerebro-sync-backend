@@ -142,6 +142,54 @@ def extract(body: ExtractIn):
     }
 
 
+# ------------------------------------------------------------- /suggest-investigations
+# Case Intelligence, slice 2: propose the next investigations for the case, each tied to the
+# question it answers (Decision #103). AI proposes; the clinician decides and orders.
+SUGGEST_INV_SYSTEM = (
+    SAFETY +
+    " Propose the most useful NEXT investigations for this case. For each, state the question "
+    "it answers and how the result would change management. Prefer high-yield, guideline-aligned "
+    "tests; don't suggest a scatter-gun panel. Return STRICT JSON only (no prose, no markdown "
+    'fences): {"investigations":[{"test":"","reason":"","changesManagement":""}]}. '
+    "6 items at most. If little can be suggested, return a short list or []."
+)
+
+
+class SuggestIn(BaseModel):
+    record: dict[str, Any] = {}
+
+
+@router.post("/api/ai/suggest-investigations")
+def suggest_investigations(body: SuggestIn):
+    record_json = json.dumps(body.record, ensure_ascii=False, indent=2)
+    user = f"De-identified patient record (JSON):\n{record_json}\n\nReturn the JSON."
+    text = _complete(SUGGEST_INV_SYSTEM, user, max_tokens=900)
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+    try:
+        data = json.loads(cleaned)
+    except Exception:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        data = json.loads(cleaned[start:end + 1]) if start >= 0 and end > start else {}
+    items = data.get("investigations", []) or []
+    out = []
+    for it in items[:6]:
+        if not isinstance(it, dict):
+            continue
+        test = (it.get("test") or "").strip()
+        if not test:
+            continue
+        out.append({
+            "test": test,
+            "reason": (it.get("reason") or "").strip(),
+            "changesManagement": (it.get("changesManagement") or "").strip(),
+        })
+    return {"investigations": out}
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
