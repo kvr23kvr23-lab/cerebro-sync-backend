@@ -15,8 +15,9 @@ shows "Online AI isn't set up" — everything non-AI keeps working.
 """
 import os
 import json
+import base64
 import datetime as dt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Any, Optional
 
@@ -204,6 +205,45 @@ def history_review(body: HistoryReviewIn):
         "missing": _list("missing"),
         "questions": _list("questions"),
     }
+
+
+# --------------------------------------------------------------------------------- /ocr
+# Reads text out of a photo (a report, a referral note, handwritten notes) so the clinician
+# can snap-and-paste instead of typing. Used by the camera button on history/exam/reasoning
+# and the investigation Result field. NOTE: unlike the text endpoints, an image cannot be
+# de-identified before sending — the clinician controls what they photograph.
+OCR_SYSTEM = (
+    "You are an OCR engine. Transcribe all text visible in the image exactly as written, "
+    "preserving line breaks, numbers and units. Output ONLY the transcribed text — no "
+    "commentary, no translation, no extra formatting. If there is no legible text, output nothing."
+)
+_OCR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+
+@router.post("/api/ocr")
+async def ocr(image: UploadFile = File(...)):
+    client = _client()  # 503 if no API key
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image.")
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 10MB).")
+    media = image.content_type if image.content_type in _OCR_TYPES else "image/jpeg"
+    b64 = base64.b64encode(raw).decode()
+    try:
+        msg = client.messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            system=OCR_SYSTEM,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+                {"type": "text", "text": "Transcribe the text in this image."},
+            ]}],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OCR failed: {e}")
+    parts = [b.text for b in (msg.content or []) if getattr(b, "type", None) == "text"]
+    return {"text": "".join(parts).strip()}
 
 
 @router.get("/api/ai/health")
