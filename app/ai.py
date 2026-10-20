@@ -61,6 +61,7 @@ class DiscussIn(BaseModel):
     record: dict[str, Any] = {}
     query: str = ""
     mode: str = "discuss"
+    template: str = ""   # optional discharge FORMAT to follow exactly (mode == "discharge")
 
 
 SAFETY = (
@@ -86,8 +87,22 @@ def discuss(body: DiscussIn):
     record_json = json.dumps(body.record, ensure_ascii=False, indent=2)
     mode = (body.mode or "discuss").lower()
     if mode == "discharge":
-        system = DISCHARGE_SYSTEM
-        user = f"De-identified patient record (JSON):\n{record_json}\n\nWrite the discharge summary."
+        tpl = (body.template or "").strip()
+        if tpl:
+            system = SAFETY + (
+                " Produce a hospital DISCHARGE SUMMARY that follows the clinician's FORMAT EXACTLY: "
+                "use their section headings, in their order, and fill each section from the record. "
+                "Do not add, rename, reorder or drop sections. If the record lacks information for a "
+                "section, write a brief 'Not documented.' under it rather than inventing anything. "
+                "Keep any fixed wording the format includes. Never present a provisional diagnosis as "
+                "confirmed — label uncertainty explicitly."
+            )
+            user = (f"De-identified patient record (JSON):\n{record_json}\n\n"
+                    f"Discharge summary FORMAT to follow exactly:\n{tpl}\n\n"
+                    "Write the discharge summary in this exact format.")
+        else:
+            system = DISCHARGE_SYSTEM
+            user = f"De-identified patient record (JSON):\n{record_json}\n\nWrite the discharge summary."
     elif body.query:
         system = SAFETY
         user = (f"De-identified patient record (JSON):\n{record_json}\n\n"

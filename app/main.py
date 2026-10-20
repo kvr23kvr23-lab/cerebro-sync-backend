@@ -52,6 +52,9 @@ app.include_router(admin_router)
 from .push import router as push_router
 app.include_router(push_router)
 
+from .templates import router as templates_router
+app.include_router(templates_router)
+
 # CORS: the frontend (Vercel) calls this API from the browser. "*" is fine for testing;
 # tighten to the exact frontend URL for a real deployment.
 app.add_middleware(

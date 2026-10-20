@@ -115,6 +115,19 @@ class PushSent(Base):
     created_at = Column(DateTime, default=_now, index=True)
 
 
+class DischargeTemplate(Base):
+    """A named discharge-summary FORMAT an admin defines and shares with the whole team.
+    `body` is the clinician's section headings/structure (plus any fixed wording); the AI
+    fills the de-identified case into it. Institution-wide — not scoped to a unit."""
+    __tablename__ = "discharge_templates"
+    id = Column(String, primary_key=True, default=_uuid)
+    name = Column(String, nullable=False)
+    body = Column(Text, nullable=False, default="")
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 # Composite indexes that make the common queries fast:
 #  - "all patients in my unit, changed since X"
 Index("ix_patients_unit_updated", Patient.unit_id, Patient.updated_at)
