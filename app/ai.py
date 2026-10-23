@@ -246,6 +246,46 @@ async def ocr(image: UploadFile = File(...)):
     return {"text": "".join(parts).strip()}
 
 
+# ----------------------------------------------------------------------- /workup
+# Suggests a focused workup for a problem/abnormality (the AI fallback for problems the
+# clinician's curated list doesn't cover). Takes only the problem text + a short de-identified
+# context — no identifiers. AI proposes; the clinician selects and orders.
+WORKUP_SYSTEM = (
+    SAFETY +
+    " Given a neurology inpatient problem/abnormality, list the most useful NEXT investigations "
+    "to work it up. High-yield and guideline-aligned; no scatter-gun. Return STRICT JSON only "
+    '(no prose, no fences): {"tests":["",""]}. Each item is a concise test name (what you would '
+    "write on an order), 4-8 items max. If little applies, return a short list or []."
+)
+
+
+class WorkupIn(BaseModel):
+    problem: str = ""
+    context: str = ""   # optional de-identified one-liner (e.g. "58M, working dx: vasculitis")
+
+
+@router.post("/api/ai/workup")
+def workup(body: WorkupIn):
+    problem = (body.problem or "").strip()
+    if not problem:
+        return {"tests": []}
+    ctx = (body.context or "").strip()
+    user = f"Problem/abnormality: {problem}" + (f"\nContext: {ctx}" if ctx else "") + "\n\nReturn the JSON."
+    text = _complete(WORKUP_SYSTEM, user, max_tokens=500)
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+    try:
+        data = json.loads(cleaned)
+    except Exception:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        data = json.loads(cleaned[start:end + 1]) if start >= 0 and end > start else {}
+    tests = [str(x).strip() for x in (data.get("tests") or []) if str(x).strip()][:8]
+    return {"tests": tests}
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
