@@ -17,7 +17,7 @@ import os
 import json
 import base64
 import datetime as dt
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Any, Optional
 
@@ -284,6 +284,61 @@ def workup(body: WorkupIn):
         data = json.loads(cleaned[start:end + 1]) if start >= 0 and end > start else {}
     tests = [str(x).strip() for x in (data.get("tests") or []) if str(x).strip()][:8]
     return {"tests": tests}
+
+
+# ------------------------------------------------------------------- /extract-panel
+# Reads a photographed report and fills a given set of panel fields (e.g. CSF: opening
+# pressure, cells, protein, glucose…). Returns only fields it can confidently read.
+@router.post("/api/ai/extract-panel")
+async def extract_panel(fields: str = Form("[]"), image: UploadFile = File(...)):
+    client = _client()  # 503 if no key
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image.")
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 10MB).")
+    media = image.content_type if image.content_type in _OCR_TYPES else "image/jpeg"
+    b64 = base64.b64encode(raw).decode()
+    try:
+        flds = json.loads(fields) or []
+    except Exception:
+        flds = []
+    valid_keys = {f.get("k") for f in flds if isinstance(f, dict) and f.get("k")}
+    field_list = "\n".join(
+        f"- {f.get('k')}: {f.get('label')}" for f in flds if isinstance(f, dict) and f.get("k")
+    )
+    system = (
+        "You read a photographed lab / investigation report and extract values for a GIVEN list "
+        "of fields. Return STRICT JSON only (no prose, no fences): "
+        '{"values":{"<key>":"<value>"}}. Include a key ONLY if you can read its value from the '
+        "image with confidence; use the EXACT field keys given. Values are short strings exactly as "
+        "reported (keep units). Never invent or infer a value that is not visibly in the image. "
+        "Omit anything you cannot read."
+    )
+    user_text = f"Fields (key: meaning):\n{field_list}\n\nRead the report image and return the JSON."
+    try:
+        msg = client.messages.create(
+            model=MODEL, max_tokens=1200, system=system,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}},
+                {"type": "text", "text": user_text},
+            ]}],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Scan failed: {e}")
+    text = "".join(b.text for b in (msg.content or []) if getattr(b, "type", None) == "text").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    try:
+        data = json.loads(text)
+    except Exception:
+        start, end = text.find("{"), text.rfind("}")
+        data = json.loads(text[start:end + 1]) if start >= 0 and end > start else {}
+    vals = data.get("values") or {}
+    out = {k: str(v).strip() for k, v in vals.items() if k in valid_keys and str(v).strip()}
+    return {"values": out}
 
 
 @router.get("/api/ai/health")
