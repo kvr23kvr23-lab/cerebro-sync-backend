@@ -17,7 +17,7 @@ Design notes:
 import uuid
 import datetime as dt
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, Index
+    Column, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, Index, Integer, LargeBinary
 )
 from sqlalchemy.orm import relationship
 from .db import Base
@@ -113,6 +113,21 @@ class PushSent(Base):
     id = Column(String, primary_key=True, default=_uuid)
     dedup_key = Column(String, nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=_now, index=True)
+
+
+class AttachmentBlob(Base):
+    """The BYTES of a patient attachment (an investigation photo/PDF). The attachment's
+    metadata already syncs inside the patient bundle; only the file bytes live here, keyed by
+    the client-generated attachment id. Scoped to the patient's unit for access control."""
+    __tablename__ = "attachment_blobs"
+    id = Column(String, primary_key=True)  # client-provided attachment id (matches bundle meta)
+    unit_id = Column(String, ForeignKey("units.id"), nullable=False, index=True)
+    patient_id = Column(String, ForeignKey("patients.id"), nullable=False, index=True)
+    content_type = Column(String, nullable=False, default="application/octet-stream")
+    size = Column(Integer, nullable=False, default=0)
+    data = Column(LargeBinary, nullable=False)
+    created_by = Column(String, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=_now)
 
 
 class DischargeTemplate(Base):
