@@ -368,6 +368,32 @@ def expand(body: ExpandIn):
     return {"text": out}
 
 
+# ----------------------------------------------------------------------- /revise
+# Revise a generated document (e.g. a discharge summary) per the clinician's instruction.
+REVISE_SYSTEM = (
+    "You revise a clinical document per the clinician's instruction. Apply ONLY the requested "
+    "change and keep everything else intact and faithful — do not invent findings or drop content "
+    "that wasn't asked to be removed. Preserve the document's format/headings. Output ONLY the full "
+    "revised document, no preamble, no commentary."
+)
+
+
+class ReviseIn(BaseModel):
+    text: str = ""
+    instruction: str = ""
+
+
+@router.post("/api/ai/revise")
+def revise(body: ReviseIn):
+    text = (body.text or "").strip()
+    instr = (body.instruction or "").strip()
+    if not text or not instr:
+        return {"text": text}
+    user = f"Document:\n{text}\n\nRequested change:\n{instr}\n\nReturn the full revised document."
+    out = _complete(REVISE_SYSTEM, user, max_tokens=2000)
+    return {"text": out}
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
