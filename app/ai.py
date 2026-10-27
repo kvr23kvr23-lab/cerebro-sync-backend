@@ -341,6 +341,33 @@ async def extract_panel(fields: str = Form("[]"), image: UploadFile = File(...))
     return {"values": out}
 
 
+# ----------------------------------------------------------------------- /expand
+# Turns the clinician's shorthand/keywords into concise clinical prose for a history section.
+EXPAND_SYSTEM = (
+    "You turn a neurologist's shorthand notes into concise, grammatical clinical prose for a "
+    "history. Expand abbreviations naturally (wk→weakness, b/l→bilateral, h/o→history of, etc.) "
+    "and write in clear sentences a clinician would document. Be FAITHFUL — never add symptoms, "
+    "findings, times or negatives that are not in the notes. Keep it brief; no headings, no "
+    "preamble, output only the prose. If a section name is given, write in that section's style."
+)
+
+
+class ExpandIn(BaseModel):
+    text: str = ""
+    section: str = ""
+
+
+@router.post("/api/ai/expand")
+def expand(body: ExpandIn):
+    text = (body.text or "").strip()
+    if not text:
+        return {"text": ""}
+    sec = (body.section or "").strip()
+    user = (f"Section: {sec}\n" if sec else "") + f"Shorthand notes:\n{text}\n\nWrite the clinical prose."
+    out = _complete(EXPAND_SYSTEM, user, max_tokens=700)
+    return {"text": out}
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
