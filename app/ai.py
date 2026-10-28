@@ -403,7 +403,10 @@ CHAT_SYSTEM = (
     "colleague and teacher. Reason through localisation, differentials and next steps; give a clear "
     "impression; answer follow-ups directly; cite guideline-level evidence or key trials where it "
     "helps. Use ONLY the record provided plus the clinician's messages — never invent findings, "
-    "numbers or identifiers, and label uncertainty. Be concise and clinical."
+    "numbers or identifiers, and label uncertainty.\n"
+    "STYLE: be concise and well-structured — a focused impression, not an exhaustive essay. Prefer "
+    "short paragraphs or tight bullet points. Keep the OPENING impression to roughly 150-250 words; "
+    "keep follow-up answers shorter still. Always finish your last sentence — never stop mid-thought."
 )
 
 
@@ -427,7 +430,7 @@ def chat(body: ChatIn):
         msgs = [{"role": "user", "content": "Study this case and give your clinical impression."}] + msgs
     client = _client()
     try:
-        resp = client.messages.create(model=MODEL, max_tokens=1600, system=system, messages=msgs)
+        resp = client.messages.create(model=MODEL, max_tokens=3000, system=system, messages=msgs)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI request failed: {e}")
     text = "".join(b.text for b in (resp.content or []) if getattr(b, "type", None) == "text").strip()
