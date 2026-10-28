@@ -394,6 +394,46 @@ def revise(body: ReviseIn):
     return {"text": out}
 
 
+# ----------------------------------------------------------------------- /chat
+# A multi-turn case discussion: the de-identified record is the context; the clinician and the
+# assistant converse. Used by the Case chat tab (impression + back-and-forth).
+CHAT_SYSTEM = (
+    SAFETY +
+    " You are discussing a de-identified neurology case with the clinician, as a knowledgeable "
+    "colleague and teacher. Reason through localisation, differentials and next steps; give a clear "
+    "impression; answer follow-ups directly; cite guideline-level evidence or key trials where it "
+    "helps. Use ONLY the record provided plus the clinician's messages — never invent findings, "
+    "numbers or identifiers, and label uncertainty. Be concise and clinical."
+)
+
+
+class ChatIn(BaseModel):
+    record: dict[str, Any] = {}
+    messages: list[dict[str, Any]] = []   # [{role: "user"|"assistant", content}]
+
+
+@router.post("/api/ai/chat")
+def chat(body: ChatIn):
+    record_json = json.dumps(body.record, ensure_ascii=False, indent=2)
+    system = CHAT_SYSTEM + "\n\nDe-identified patient record (JSON):\n" + record_json
+    msgs = []
+    for m in (body.messages or [])[-24:]:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            msgs.append({"role": role, "content": content})
+    # Anthropic requires the conversation to start with a user turn.
+    if not msgs or msgs[0]["role"] != "user":
+        msgs = [{"role": "user", "content": "Study this case and give your clinical impression."}] + msgs
+    client = _client()
+    try:
+        resp = client.messages.create(model=MODEL, max_tokens=1600, system=system, messages=msgs)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI request failed: {e}")
+    text = "".join(b.text for b in (resp.content or []) if getattr(b, "type", None) == "text").strip()
+    return {"reply": text}
+
+
 @router.get("/api/ai/health")
 def ai_health():
     return {"ai_configured": bool(os.environ.get("ANTHROPIC_API_KEY")), "model": MODEL,
