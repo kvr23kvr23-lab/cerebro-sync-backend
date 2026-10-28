@@ -18,6 +18,7 @@ import json
 import base64
 import datetime as dt
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Optional
 
@@ -435,6 +436,44 @@ def chat(body: ChatIn):
         raise HTTPException(status_code=502, detail=f"AI request failed: {e}")
     text = "".join(b.text for b in (resp.content or []) if getattr(b, "type", None) == "text").strip()
     return {"reply": text}
+
+
+def _build_chat(body: "ChatIn"):
+    """Shared request-shaping for both the blocking and streaming chat endpoints."""
+    record_json = json.dumps(body.record, ensure_ascii=False, indent=2)
+    system = CHAT_SYSTEM + "\n\nDe-identified patient record (JSON):\n" + record_json
+    msgs = []
+    for m in (body.messages or [])[-24:]:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            msgs.append({"role": role, "content": content})
+    if not msgs or msgs[0]["role"] != "user":
+        msgs = [{"role": "user", "content": "Study this case and give your clinical impression."}] + msgs
+    return system, msgs
+
+
+@router.post("/api/ai/chat/stream")
+def chat_stream(body: ChatIn):
+    """Same as /chat but streams the answer token-by-token (text/plain), so the reply
+    appears as it's written instead of after a long wait. The client appends each chunk."""
+    system, msgs = _build_chat(body)
+    client = _client()
+
+    def gen():
+        try:
+            with client.messages.stream(model=MODEL, max_tokens=3000, system=system, messages=msgs) as stream:
+                for chunk in stream.text_stream:
+                    if chunk:
+                        yield chunk
+        except Exception as e:  # surface the error inside the stream so the UI can show it
+            yield f"\n\n(AI request failed: {e})"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/api/ai/health")
