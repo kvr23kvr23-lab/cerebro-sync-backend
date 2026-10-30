@@ -503,6 +503,7 @@ class LiteratureIn(BaseModel):
     cursor: str = "*"        # Europe PMC cursorMark; "*" is the first page
     page_size: int = 5
     case_only: bool = False  # restrict to case reports / case series
+    focus: str = ""          # optional refine term appended to the query (e.g. "treatment OR therapy")
 
 
 def _build_query(record: dict, manual: str) -> str:
@@ -567,6 +568,10 @@ def _epmc_article(r: dict) -> dict:
 @router.post("/api/ai/literature")
 def literature(body: LiteratureIn):
     query = _build_query(body.record, body.query)
+    # Optional one-tap refine: narrow the same case query to an angle (treatment, diagnosis…).
+    focus = " ".join((body.focus or "").split())[:120]
+    if focus:
+        query = f"({query}) AND ({focus})"
     # Optional: restrict to case reports / case series. Europe PMC indexes these under the
     # "Case Reports" publication type.
     if body.case_only:
