@@ -502,6 +502,7 @@ class LiteratureIn(BaseModel):
     query: str = ""          # optional: clinician-supplied query overrides the generated one
     cursor: str = "*"        # Europe PMC cursorMark; "*" is the first page
     page_size: int = 5
+    case_only: bool = False  # restrict to case reports / case series
 
 
 def _build_query(record: dict, manual: str) -> str:
@@ -531,12 +532,30 @@ def _epmc_article(r: dict) -> dict:
         abstract = abstract.replace(tag, "")
     if len(abstract) > 300:
         abstract = abstract[:300].rstrip() + "…"
+    # Publication type — pick the most useful label (case report/series, review, trial…).
+    pub_types = r.get("pubTypeList") or {}
+    types = pub_types.get("pubType") if isinstance(pub_types, dict) else None
+    if isinstance(types, str):
+        types = [types]
+    types = [t for t in (types or []) if isinstance(t, str)]
+    low = " | ".join(types).lower()
+    if "case report" in low or "case series" in low:
+        kind = "Case report"
+    elif "review" in low or "meta-analysis" in low or "systematic" in low:
+        kind = "Review"
+    elif "trial" in low:
+        kind = "Trial"
+    elif "guideline" in low:
+        kind = "Guideline"
+    else:
+        kind = (types[0] if types else "")
     return {
         "id": f"{src}:{rid}",
         "title": (r.get("title") or "(untitled)").rstrip("."),
         "authors": r.get("authorString") or "",
         "journal": journal,
         "year": str(r.get("pubYear") or ""),
+        "kind": kind,
         "isOpenAccess": (r.get("isOpenAccess") == "Y"),
         "url": url,
         "pmid": pmid or "",
@@ -548,6 +567,10 @@ def _epmc_article(r: dict) -> dict:
 @router.post("/api/ai/literature")
 def literature(body: LiteratureIn):
     query = _build_query(body.record, body.query)
+    # Optional: restrict to case reports / case series. Europe PMC indexes these under the
+    # "Case Reports" publication type.
+    if body.case_only:
+        query = f"({query}) AND (PUB_TYPE:\"Case Reports\")"
     params = {
         "query": query,
         "format": "json",
