@@ -39,22 +39,24 @@ def run_seed():
         db.close()
 
 
-def reset_admin(password):
-    """Recovery: force the admin account to a known password (create it if missing), ensure it is
-    active, has the admin role, and belongs to a unit. Triggered by RESET_ADMIN_PASSWORD on
-    startup. Unlike run_seed(), this OVERWRITES an existing admin's password."""
+def reset_admin(password, username="admin"):
+    """Recovery: force an account to a known password (create it if missing), ensure it is active,
+    has the admin role, and belongs to a unit. Triggered by RESET_ADMIN_PASSWORD on startup
+    (target username via RESET_USERNAME, default 'admin'). Unlike run_seed(), this OVERWRITES an
+    existing password — and re-activates a disabled account."""
+    username = (username or "admin").strip().lower()
     db = SessionLocal()
     try:
         unit = db.query(Unit).filter(Unit.name == "Unit 1").first()
         if not unit:
             unit = Unit(name="Unit 1"); db.add(unit); db.commit(); db.refresh(unit)
-        u = db.query(User).filter(User.username == "admin").first()
+        u = db.query(User).filter(User.username == username).first()
         if not u:
-            u = User(username="admin", password_hash=hash_password(password),
-                     display_name="Admin", role="admin", active=True)
+            u = User(username=username, password_hash=hash_password(password),
+                     display_name=username.title(), role="admin", active=True)
             u.units = [unit]
             db.add(u); db.commit()
-            print("reset_admin: created admin with provided password")
+            print(f"reset_admin: created '{username}' with provided password")
         else:
             u.password_hash = hash_password(password)
             u.active = True
@@ -62,6 +64,6 @@ def reset_admin(password):
             if unit not in (u.units or []):
                 u.units = list(u.units or []) + [unit]
             db.commit()
-            print("reset_admin: reset admin password")
+            print(f"reset_admin: reset password + re-activated '{username}'")
     finally:
         db.close()

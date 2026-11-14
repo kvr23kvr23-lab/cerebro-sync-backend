@@ -45,7 +45,10 @@ _reset_pw = _os.environ.get("RESET_ADMIN_PASSWORD")
 if _reset_pw:
     try:
         from .seed_data import reset_admin
-        reset_admin(_reset_pw)
+        # RESET_USERNAME lets you target your own account by name (default "admin"). This also
+        # re-activates a disabled account, so it recovers both a forgotten password and an
+        # accidentally switched-off login.
+        reset_admin(_reset_pw, _os.environ.get("RESET_USERNAME", "admin"))
     except Exception as _e:
         print("Admin reset skipped:", _e)
 
