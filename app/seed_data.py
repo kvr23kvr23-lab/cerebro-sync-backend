@@ -37,3 +37,31 @@ def run_seed():
         print("Seed complete.")
     finally:
         db.close()
+
+
+def reset_admin(password):
+    """Recovery: force the admin account to a known password (create it if missing), ensure it is
+    active, has the admin role, and belongs to a unit. Triggered by RESET_ADMIN_PASSWORD on
+    startup. Unlike run_seed(), this OVERWRITES an existing admin's password."""
+    db = SessionLocal()
+    try:
+        unit = db.query(Unit).filter(Unit.name == "Unit 1").first()
+        if not unit:
+            unit = Unit(name="Unit 1"); db.add(unit); db.commit(); db.refresh(unit)
+        u = db.query(User).filter(User.username == "admin").first()
+        if not u:
+            u = User(username="admin", password_hash=hash_password(password),
+                     display_name="Admin", role="admin", active=True)
+            u.units = [unit]
+            db.add(u); db.commit()
+            print("reset_admin: created admin with provided password")
+        else:
+            u.password_hash = hash_password(password)
+            u.active = True
+            u.role = "admin"
+            if unit not in (u.units or []):
+                u.units = list(u.units or []) + [unit]
+            db.commit()
+            print("reset_admin: reset admin password")
+    finally:
+        db.close()

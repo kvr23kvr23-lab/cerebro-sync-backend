@@ -38,6 +38,17 @@ if _os.environ.get("SEED_ON_START") == "1":
     except Exception as _e:  # never let seeding crash startup
         print("Seed-on-start skipped:", _e)
 
+# Recovery: if RESET_ADMIN_PASSWORD is set, (re)create the admin account with that password on
+# startup — the one safe way back in after a lost/empty database or a forgotten admin password.
+# Set it in the host's env, redeploy, log in as admin, then REMOVE the var. Idempotent.
+_reset_pw = _os.environ.get("RESET_ADMIN_PASSWORD")
+if _reset_pw:
+    try:
+        from .seed_data import reset_admin
+        reset_admin(_reset_pw)
+    except Exception as _e:
+        print("Admin reset skipped:", _e)
+
 app = FastAPI(title="Cerebro Multi-User Backend", version="0.1.0")
 
 # AI endpoints (Draft with AI, note auto-extract) — same server, needs ANTHROPIC_API_KEY.
