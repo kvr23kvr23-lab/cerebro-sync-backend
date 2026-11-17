@@ -30,6 +30,35 @@ def _user_out(u: User) -> dict:
     }
 
 
+# ------------------------------------------------------------------------- backup / export
+@router.get("/export")
+def export_all(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Full data export for backup (admin only). Returns units, the user roster (no passwords),
+    and every patient + clinical record as JSON. Download and keep this independently of Render,
+    so your clinical data never depends on a single provider."""
+    import datetime as _dt
+
+    def _iso(d):
+        return (d.isoformat() + "Z") if d else None
+
+    units = db.query(Unit).all()
+    users = db.query(User).all()
+    patients = db.query(Patient).all()
+    records = db.query(ClinicalRecord).all()
+    return {
+        "schema": "cerebro-export-v1",
+        "exported_at": _dt.datetime.utcnow().isoformat() + "Z",
+        "counts": {"units": len(units), "users": len(users), "patients": len(patients), "records": len(records)},
+        "units": [{"id": u.id, "name": u.name} for u in units],
+        "users": [{"id": u.id, "username": u.username, "display_name": u.display_name,
+                   "role": u.role, "active": bool(u.active), "unit_ids": [x.id for x in u.units]} for u in users],
+        "patients": [{"id": p.id, "unit_id": p.unit_id, "data": p.data, "deleted": bool(p.deleted),
+                      "created_by": p.created_by, "updated_by": p.updated_by, "updated_at": _iso(p.updated_at)} for p in patients],
+        "records": [{"id": r.id, "unit_id": r.unit_id, "patient_id": r.patient_id, "kind": r.kind, "data": r.data,
+                     "deleted": bool(r.deleted), "created_by": r.created_by, "updated_by": r.updated_by, "updated_at": _iso(r.updated_at)} for r in records],
+    }
+
+
 # ------------------------------------------------------------------------- units/wards
 @router.get("/units")
 def list_units(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
