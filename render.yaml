@@ -29,3 +29,9 @@ services:
         value: "3.12.7"
       - key: SEED_ON_START
         value: "1"
+      # AI features (OCR, Draft, Discuss, literature). The VALUE is set in the Render
+      # dashboard, never here — sync:false tells the blueprint to leave it alone and never
+      # prune it on a re-sync. If AI returns 401 "invalid x-api-key", re-paste a valid key
+      # from console.anthropic.com into this var in the dashboard.
+      - key: ANTHROPIC_API_KEY
+        sync: false
