@@ -3,13 +3,13 @@
 # It provisions a PostgreSQL database and a web service, wires DATABASE_URL between them,
 # generates a JWT secret, and seeds the first unit + login users on first start.
 #
-# Free tiers are fine for testing: the web service sleeps when idle (first request after a
-# nap takes ~30–50s to wake), and Render's free database is time-limited. Upgrade either to
-# a paid instance (~$7/mo each) when you want it always-on and persistent.
+# The database runs on a paid plan (basic-256mb, ~$6–7/mo) so it is persistent and never
+# expires. The web service stays on free (sleeps when idle; first request after a nap takes
+# ~30–50s to wake) — switch it to a paid plan too if you want it always-on.
 
 databases:
   - name: cerebro-db
-    plan: free
+    plan: basic-256mb
 
 services:
   - type: web
